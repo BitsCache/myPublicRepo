@@ -1,0 +1,1139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!-- 仅浅色配色：墨水屏设备不应切换深色模式，避免整屏反色闪刷 -->
+<meta name="color-scheme" content="light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23000'/%3E%3Ccircle cx='8' cy='8' r='5.5' fill='none' stroke='%23fff' stroke-width='1.5'/%3E%3Cpath d='M8 4.5V8l2.4 1.5' stroke='%23fff' stroke-width='1.5' fill='none'/%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>InkTime · 墨水屏时钟</title>
+<noscript><p style="font:16px/1.6 sans-serif;padding:24px">此页面需要启用 JavaScript 才能显示时钟。</p></noscript>
+<style>
+/* ============================================================
+   设计令牌：墨水屏只有黑白，色彩令牌仅为 纸白/墨黑 + 两级灰
+   缩放单位 --u：1u = 所选比例原生分辨率下的 1px，由 JS 按舞台
+   实际宽度换算，保证 1440×1080 与 1080×1440 两套版式一致
+   ============================================================ */
+:root{
+  --paper:#ffffff;
+  --ink:#000000;
+  --soft:#2b2b2b;   /* 次级文字（农历行等） */
+  --mute:#999999;   /* 非本月日期 */
+  --f-sans:"Helvetica Neue",Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+  --f-mono:ui-monospace,"SF Mono",Menlo,Consolas,"Courier New",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--f-sans);
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+  -webkit-tap-highlight-color:transparent;
+}
+/* 整页禁用动画/过渡：墨水屏刷新代价高，动效只增加残影与耗电 */
+*,*::before,*::after{transition:none!important;animation:none!important}
+
+/* ---------------- 舞台 ---------------- */
+#stage{
+  position:relative;
+  background:var(--paper);
+  color:var(--ink);
+  overflow:hidden;
+  display:grid;
+  user-select:none;
+  -webkit-user-select:none;
+}
+#stage>*{min-width:0;min-height:0}
+
+/* ---------------- 顶栏 ---------------- */
+.bar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:calc(20*var(--u));
+  padding:calc(16*var(--u)) calc(40*var(--u));
+  font-size:calc(24*var(--u));
+  font-weight:700;
+}
+.brand{letter-spacing:.22em}
+.meta{font-family:var(--f-mono);font-variant-numeric:tabular-nums;letter-spacing:.06em;font-weight:700}
+
+/* ---------------- 时间 ---------------- */
+.timeblock{display:flex;flex-direction:column;justify-content:center}
+.hm{
+  font-family:var(--f-mono);
+  font-size:calc(290*var(--u));
+  font-weight:700;
+  line-height:1;
+  letter-spacing:.04em;
+  font-variant-numeric:tabular-nums;
+  text-align:center;
+  position:relative;
+}
+.eyebrow{
+  display:none;
+  font-size:calc(20*var(--u));
+  font-weight:700;
+  letter-spacing:.22em;
+  margin-bottom:calc(18*var(--u));
+}
+
+/* ---------------- 日期区 ---------------- */
+.dateblock{display:flex}
+.info{display:flex;flex-direction:column;gap:calc(14*var(--u))}
+.bignum{
+  display:none;
+  font-family:Arial,Helvetica,var(--f-sans);
+  font-weight:900;
+  line-height:.82;
+  letter-spacing:-.05em;
+  font-variant-numeric:tabular-nums;
+}
+.d1{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:calc(14*var(--u));
+  font-size:calc(40*var(--u));
+  font-weight:700;
+  line-height:1.3;
+  font-variant-numeric:tabular-nums;
+}
+.chip{display:inline-block}
+/* 日期主行禁止中途断行（如「2026年9月23|日」），宁可整块换行也不拆日期 */
+#dateMain{white-space:nowrap}
+.d2{font-size:calc(26*var(--u));color:var(--soft);line-height:1.5;font-variant-numeric:tabular-nums}
+
+/* ---------------- 表盘（仅表盘款式显示） ---------------- */
+.dial{display:none;width:100%;height:100%}
+
+/* ---------------- 月历 ---------------- */
+/* 行高下限 min-content：日历区永远不被 fr 压缩，格子内容绝不裁切 */
+.cal{display:grid;grid-template-rows:auto auto minmax(min-content,1fr);gap:calc(14*var(--u))}
+.cal-head{
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:calc(16*var(--u));
+  font-size:calc(32*var(--u));
+  font-weight:700;
+  font-variant-numeric:tabular-nums;
+}
+.gz{font-size:calc(24*var(--u));font-weight:500}
+.cal-wk,.cal-grid{display:grid;grid-template-columns:repeat(7,1fr)}
+.cal-wk{font-size:calc(23*var(--u));font-weight:700;text-align:center;padding:calc(8*var(--u)) 0}
+.cal-grid{
+  grid-template-rows:repeat(6,1fr);
+  background:var(--ink);
+  gap:calc(1.5*var(--u));
+  padding:calc(1.5*var(--u));
+}
+/* 统一月历线稿：容器留边 + 格子右/下边框 = 全表单线，避免双重描边 */
+/* 不设 overflow:hidden —— 否则格子的网格自动最小高度归零，行被压扁时内容会被裁掉 */
+.cell{
+  background:var(--paper);
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:calc(4*var(--u));
+  border-right:calc(1.5*var(--u)) solid var(--ink);
+  border-bottom:calc(1.5*var(--u)) solid var(--ink);
+}
+.cell .d{font-size:calc(34*var(--u));font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.cell .l{font-size:calc(16*var(--u));line-height:1.1;color:var(--soft);white-space:nowrap}
+.cell.out .d,.cell.out .l{color:var(--mute)}
+.cell.today{background:var(--ink);color:var(--paper)}
+.cell.today .l{color:var(--paper)}
+
+/* ============================================================
+   款式一：翻页站台 —— 黑底反白数字 + 中缝切口，车站发车牌的语言
+   ============================================================ */
+[data-style="flip"] .bar{background:var(--ink);color:var(--paper)}
+[data-style="flip"] .timeblock{background:var(--ink);padding:calc(44*var(--u)) calc(40*var(--u))}
+[data-style="flip"] .hm{color:var(--paper)}
+/* 合缝：纸色细线横贯黑牌，翻板接缝感；线与白字同色，数字不再被黑条切断 */
+[data-style="flip"] .hm::after{
+  content:"";
+  position:absolute;
+  left:-4%;
+  right:-4%;
+  top:50%;
+  height:calc(4*var(--u));
+  background:var(--paper);
+}
+[data-style="flip"] .dateblock{padding:calc(34*var(--u)) calc(40*var(--u))}
+[data-style="flip"] .chip{border:calc(2*var(--u)) solid var(--ink);padding:0 calc(10*var(--u))}
+[data-style="flip"] .cal{padding:calc(22*var(--u)) calc(36*var(--u)) calc(30*var(--u))}
+[data-style="flip"] .cal-head{background:var(--ink);color:var(--paper);padding:calc(12*var(--u)) calc(18*var(--u));font-size:calc(30*var(--u))}
+[data-style="flip"] .cal-wk{background:var(--ink);color:var(--paper)}
+[data-style="flip"][data-ratio="1440x1080"] .dateblock{border-right:calc(2*var(--u)) solid var(--ink);align-items:center}
+[data-style="flip"][data-ratio="1080x1440"] .dateblock{border-bottom:calc(2*var(--u)) solid var(--ink)}
+[data-style="flip"][data-ratio="1080x1440"] .hm{font-size:calc(240*var(--u))}
+
+/* ============================================================
+   款式二：撕历台历 —— 巨字日号 + 黑章星期 + 虚线撕口
+   ============================================================ */
+[data-style="tear"] .bar{border-bottom:calc(7*var(--u)) double var(--ink);font-size:calc(23*var(--u))}
+[data-style="tear"] .bignum{display:block;font-size:calc(300*var(--u))}
+[data-style="tear"] .chip{background:var(--ink);color:var(--paper);padding:calc(4*var(--u)) calc(14*var(--u));font-size:calc(34*var(--u))}
+[data-style="tear"] .hm{font-family:var(--f-sans);font-weight:800;font-size:calc(180*var(--u));letter-spacing:-.02em}
+[data-style="tear"] .cal{border-top:calc(6*var(--u)) dashed var(--ink);padding-top:calc(18*var(--u))}
+[data-style="tear"] .cal-head{font-size:calc(30*var(--u));border-bottom:calc(2*var(--u)) solid var(--ink);padding-bottom:calc(10*var(--u))}
+[data-style="tear"][data-ratio="1440x1080"] .dateblock{
+  align-items:flex-end;
+  gap:calc(36*var(--u));
+  padding-bottom:calc(14*var(--u));
+}
+[data-style="tear"][data-ratio="1440x1080"] .timeblock{
+  align-items:flex-end;
+  border-left:calc(6*var(--u)) double var(--ink);
+  padding-left:calc(30*var(--u));
+  padding-bottom:calc(14*var(--u));
+}
+/* 信息栏仅 266u 宽，40u 日期会把「日」挤到下一行，收小到 34u 单行放下 */
+[data-style="tear"][data-ratio="1440x1080"] .d1{font-size:calc(34*var(--u))}
+[data-style="tear"][data-ratio="1440x1080"] .hm{text-align:right}
+[data-style="tear"][data-ratio="1080x1440"] .dateblock{flex-direction:column;align-items:center;text-align:center;gap:calc(18*var(--u))}
+[data-style="tear"][data-ratio="1080x1440"] .info{align-items:center;text-align:center}
+[data-style="tear"][data-ratio="1080x1440"] .bignum{font-size:calc(380*var(--u))}
+[data-style="tear"][data-ratio="1080x1440"] .timeblock{padding:calc(10*var(--u)) 0}
+[data-style="tear"][data-ratio="1080x1440"] .hm{font-size:calc(210*var(--u))}
+
+/* ============================================================
+   款式三：仪表网格 —— 细线分区 + 引导标签，仪表面板的秩序
+   ============================================================ */
+[data-style="grid"]{border:calc(4*var(--u)) solid var(--ink)}
+[data-style="grid"] .bar{border-bottom:calc(2*var(--u)) solid var(--ink);padding:calc(14*var(--u)) calc(32*var(--u))}
+[data-style="grid"] .eyebrow{display:block}
+[data-style="grid"] .timeblock{padding:calc(36*var(--u)) calc(40*var(--u))}
+[data-style="grid"] .hm{font-family:var(--f-sans);font-weight:800;font-size:calc(210*var(--u));letter-spacing:-.02em;text-align:left}
+[data-style="grid"] .dateblock{padding:calc(24*var(--u)) calc(40*var(--u)) calc(30*var(--u));border-top:calc(2*var(--u)) solid var(--ink);gap:calc(12*var(--u))}
+[data-style="grid"] .chip{border:calc(2*var(--u)) solid var(--ink);padding:0 calc(12*var(--u))}
+[data-style="grid"] .cal{padding:calc(22*var(--u)) calc(28*var(--u))}
+[data-style="grid"] .cal-head{border-bottom:calc(2*var(--u)) solid var(--ink);padding-bottom:calc(12*var(--u))}
+[data-style="grid"][data-ratio="1440x1080"] .cal{border-left:calc(2*var(--u)) solid var(--ink)}
+[data-style="grid"][data-ratio="1440x1080"] .d1{font-size:calc(38*var(--u))}
+[data-style="grid"][data-ratio="1080x1440"] .cal{border-top:calc(2*var(--u)) solid var(--ink)}
+[data-style="grid"][data-ratio="1080x1440"] .hm{font-size:calc(280*var(--u))}
+
+/* ============================================================
+   款式四：圆形表盘 —— 分钟跳格指针 + 居中数字，挂钟的语言
+   ============================================================ */
+[data-style="dial"] .dial{display:block;align-self:center;justify-self:center;padding:calc(10*var(--u))}
+[data-style="dial"] .bar{border-bottom:calc(2*var(--u)) solid var(--ink);padding:calc(14*var(--u)) calc(36*var(--u))}
+[data-style="dial"] .timeblock{align-items:center;padding:calc(8*var(--u)) 0;text-align:center}
+[data-style="dial"] .hm{font-family:var(--f-sans);font-weight:800;font-size:calc(160*var(--u));letter-spacing:-.01em}
+[data-style="dial"] .dateblock{flex-direction:column;align-items:center;text-align:center;gap:calc(10*var(--u));padding-bottom:calc(6*var(--u))}
+[data-style="dial"] .info{align-items:center;text-align:center}
+[data-style="dial"] .d1{justify-content:center;font-size:calc(34*var(--u))}
+[data-style="dial"] .d2{font-size:calc(24*var(--u))}
+[data-style="dial"] .chip{border:calc(2*var(--u)) solid var(--ink);padding:0 calc(10*var(--u))}
+[data-style="dial"] .cal{padding:calc(20*var(--u)) calc(30*var(--u)) calc(26*var(--u))}
+[data-style="dial"] .cal-head{border-bottom:calc(2*var(--u)) solid var(--ink);padding-bottom:calc(10*var(--u));font-size:calc(30*var(--u))}
+[data-style="dial"][data-ratio="1440x1080"] .cal{border-left:calc(2*var(--u)) solid var(--ink)}
+[data-style="dial"][data-ratio="1080x1440"] .cal{border-top:calc(2*var(--u)) solid var(--ink)}
+[data-style="dial"][data-ratio="1080x1440"] .hm{font-size:calc(180*var(--u))}
+/* ============================================================
+   网格模板：4 款式 × 2 比例 = 8 套排布
+   横向差异靠列比例，纵向差异靠行序；比例切换只改模板不改组件
+   ============================================================ */
+/* 翻页站台 · 横屏：顶栏/时间通栏，下方 日期|日历 双列 */
+[data-style="flip"][data-ratio="1440x1080"]{
+  grid-template-columns:minmax(0,42fr) minmax(0,58fr);
+  grid-template-rows:auto auto minmax(min-content,1fr);
+  grid-template-areas:"bar bar" "time time" "date cal";
+  gap:calc(22*var(--u));
+  padding-bottom:calc(8*var(--u));
+}
+[data-style="flip"][data-ratio="1440x1080"] .bar{grid-area:bar}
+[data-style="flip"][data-ratio="1440x1080"] .timeblock{grid-area:time}
+[data-style="flip"][data-ratio="1440x1080"] .dateblock{grid-area:date}
+[data-style="flip"][data-ratio="1440x1080"] .cal{grid-area:cal}
+
+/* 翻页站台 · 竖屏：单列纵向堆叠 */
+[data-style="flip"][data-ratio="1080x1440"]{
+  grid-template-columns:minmax(0,1fr);
+  grid-template-rows:auto auto auto minmax(min-content,1fr);
+  grid-template-areas:"bar" "time" "date" "cal";
+  gap:calc(22*var(--u));
+  padding-bottom:calc(8*var(--u));
+}
+[data-style="flip"][data-ratio="1080x1440"] .bar{grid-area:bar}
+[data-style="flip"][data-ratio="1080x1440"] .timeblock{grid-area:time}
+[data-style="flip"][data-ratio="1080x1440"] .dateblock{grid-area:date}
+[data-style="flip"][data-ratio="1080x1440"] .cal{grid-area:cal}
+
+/* 撕历台历 · 横屏：巨字日号 | 时间（双竖线分隔），日历整幅在下 */
+[data-style="tear"][data-ratio="1440x1080"]{
+  grid-template-columns:minmax(0,50fr) minmax(0,50fr);
+  grid-template-rows:auto minmax(min-content,1fr) minmax(min-content,1.15fr);
+  grid-template-areas:"bar bar" "date time" "cal cal";
+  gap:calc(24*var(--u));
+  padding:calc(36*var(--u)) calc(36*var(--u)) calc(30*var(--u));
+}
+[data-style="tear"][data-ratio="1440x1080"] .bar{grid-area:bar}
+[data-style="tear"][data-ratio="1440x1080"] .dateblock{grid-area:date}
+[data-style="tear"][data-ratio="1440x1080"] .timeblock{grid-area:time}
+[data-style="tear"][data-ratio="1440x1080"] .cal{grid-area:cal}
+
+/* 撕历台历 · 竖屏：日号→时间→日历 三段式，如一页台历 */
+[data-style="tear"][data-ratio="1080x1440"]{
+  grid-template-columns:minmax(0,1fr);
+  grid-template-rows:auto auto auto minmax(min-content,1fr);
+  grid-template-areas:"bar" "date" "time" "cal";
+  gap:calc(22*var(--u));
+  padding:calc(36*var(--u)) calc(40*var(--u)) calc(30*var(--u));
+}
+[data-style="tear"][data-ratio="1080x1440"] .bar{grid-area:bar}
+[data-style="tear"][data-ratio="1080x1440"] .dateblock{grid-area:date}
+[data-style="tear"][data-ratio="1080x1440"] .timeblock{grid-area:time}
+[data-style="tear"][data-ratio="1080x1440"] .cal{grid-area:cal}
+
+/* 仪表网格 · 横屏：左列 时间/日期，右列日历贯通，细线分区 */
+[data-style="grid"][data-ratio="1440x1080"]{
+  grid-template-columns:minmax(0,44fr) minmax(0,56fr);
+  grid-template-rows:auto minmax(min-content,1fr) auto;
+  grid-template-areas:"bar bar" "time cal" "date cal";
+  gap:0;
+}
+[data-style="grid"][data-ratio="1440x1080"] .bar{grid-area:bar}
+[data-style="grid"][data-ratio="1440x1080"] .timeblock{grid-area:time}
+[data-style="grid"][data-ratio="1440x1080"] .dateblock{grid-area:date}
+[data-style="grid"][data-ratio="1440x1080"] .cal{grid-area:cal}
+
+/* 仪表网格 · 竖屏：逐行分区，日历垫底 */
+[data-style="grid"][data-ratio="1080x1440"]{
+  grid-template-columns:minmax(0,1fr);
+  grid-template-rows:auto minmax(0,1fr) auto minmax(min-content,1.25fr);
+  grid-template-areas:"bar" "time" "date" "cal";
+  gap:0;
+}
+[data-style="grid"][data-ratio="1080x1440"] .bar{grid-area:bar}
+[data-style="grid"][data-ratio="1080x1440"] .timeblock{grid-area:time}
+[data-style="grid"][data-ratio="1080x1440"] .dateblock{grid-area:date}
+[data-style="grid"][data-ratio="1080x1440"] .cal{grid-area:cal}
+
+/* 圆形表盘 · 横屏：左列 表盘+时间+日期，右列日历贯通 */
+[data-style="dial"][data-ratio="1440x1080"]{
+  grid-template-columns:minmax(0,46fr) minmax(0,54fr);
+  grid-template-rows:auto minmax(min-content,1fr) auto auto;
+  grid-template-areas:"bar bar" "dial cal" "time cal" "date cal";
+  gap:calc(18*var(--u));
+  padding:calc(30*var(--u)) calc(34*var(--u)) calc(26*var(--u));
+}
+[data-style="dial"][data-ratio="1440x1080"] .bar{grid-area:bar}
+[data-style="dial"][data-ratio="1440x1080"] .dial{grid-area:dial}
+[data-style="dial"][data-ratio="1440x1080"] .timeblock{grid-area:time}
+[data-style="dial"][data-ratio="1440x1080"] .dateblock{grid-area:date}
+[data-style="dial"][data-ratio="1440x1080"] .cal{grid-area:cal}
+
+/* 圆形表盘 · 竖屏：表盘居上，数字/日期居中，日历垫底 */
+[data-style="dial"][data-ratio="1080x1440"]{
+  grid-template-columns:minmax(0,1fr);
+  /* 日历行按内容定高（非 fr），表盘行吃剩余空间——保证日历不被压且表盘不至于骤缩 */
+  grid-template-rows:auto minmax(0,1.1fr) auto auto minmax(min-content,max-content);
+  grid-template-areas:"bar" "dial" "time" "date" "cal";
+  gap:calc(16*var(--u));
+  padding:calc(30*var(--u)) calc(40*var(--u)) calc(26*var(--u));
+}
+[data-style="dial"][data-ratio="1080x1440"] .bar{grid-area:bar}
+[data-style="dial"][data-ratio="1080x1440"] .dial{grid-area:dial}
+[data-style="dial"][data-ratio="1080x1440"] .timeblock{grid-area:time}
+[data-style="dial"][data-ratio="1080x1440"] .dateblock{grid-area:date}
+[data-style="dial"][data-ratio="1080x1440"] .cal{grid-area:cal}
+
+.bar-end{display:flex;align-items:center;gap:calc(16*var(--u))}
+/* 设置齿轮内嵌顶栏右侧：随顶栏配色（翻页款黑底自动反白），不悬浮不遮挡内容 */
+#gear{
+  display:grid;
+  place-items:center;
+  padding:calc(4*var(--u));
+  border:0;
+  background:none;
+  color:inherit;
+  line-height:0;
+  cursor:pointer;
+}
+#gear svg{display:block}
+#gear[aria-expanded="true"],body:not(.idle) #gear{opacity:1}
+body.idle #gear{opacity:0;pointer-events:none}
+#gear:focus-visible{opacity:1;outline:3px solid currentColor;outline-offset:2px}
+
+/* ---------------- 设置弹窗：固定像素，不受 --u 缩放，保证可读性 ---------------- */
+#overlay[hidden]{display:none}
+#overlay{
+  position:fixed;
+  inset:0;
+  z-index:100;
+  display:grid;
+  place-items:center;
+  padding:16px;
+}
+.backdrop{position:absolute;inset:0;background:rgba(0,0,0,.48)}
+.modal{
+  position:relative;
+  width:min(560px,calc(100vw - 32px));
+  max-height:calc(100vh - 32px);
+  overflow:auto;
+  background:var(--paper);
+  color:var(--ink);
+  border:3px solid var(--ink);
+  font-family:var(--f-sans);
+}
+.m-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:16px 20px;
+  border-bottom:2px solid var(--ink);
+}
+.m-head h2{font-size:18px;letter-spacing:.14em}
+.m-close{
+  width:40px;height:40px;
+  border:2px solid var(--ink);
+  background:var(--paper);
+  font-size:18px;
+  line-height:1;
+  cursor:pointer;
+}
+.m-body{padding:18px 20px 20px;display:flex;flex-direction:column;gap:20px}
+.m-sec h3{font-size:13px;font-weight:700;letter-spacing:.16em;margin-bottom:10px}
+.hint{font-size:12.5px;line-height:1.6;color:var(--soft);margin-top:8px}
+.hint.err{font-weight:700;color:var(--ink);border:2px solid var(--ink);padding:6px 10px;margin-top:10px}
+.seg{display:flex}
+.seg-btn{
+  flex:1 1 0;
+  min-width:0;
+  min-height:46px;
+  padding:6px 4px;
+  border:2px solid var(--ink);
+  margin-left:-2px;
+  background:var(--paper);
+  color:var(--ink);
+  font:inherit;
+  font-size:14px;
+  cursor:pointer;
+}
+.seg-btn:first-child{margin-left:0}
+.seg-btn:hover{background:var(--ink);color:var(--paper)}
+.seg-btn[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+.seg-btn:focus-visible,.btn:focus-visible,.m-close:focus-visible,#gear:focus-visible,input:focus-visible{
+  outline:3px solid var(--ink);
+  outline-offset:2px;
+}
+.custom-row{display:flex;gap:10px;align-items:center;margin-top:12px;font-size:14px}
+.custom-row[hidden]{display:none}
+.custom-row label{font-weight:700}
+.custom-row input{
+  width:96px;height:42px;
+  border:2px solid var(--ink);
+  font:inherit;
+  font-size:16px;
+  text-align:center;
+}
+.custom-row input.bad{border-width:3px;font-weight:700}
+.m-actions{display:flex;gap:12px;justify-content:flex-end}
+.btn{
+  min-height:44px;
+  padding:0 18px;
+  border:2px solid var(--ink);
+  background:var(--paper);
+  color:var(--ink);
+  font:inherit;
+  font-size:14.5px;
+  cursor:pointer;
+}
+.btn:hover{background:var(--ink);color:var(--paper)}
+.btn-solid{background:var(--ink);color:var(--paper)}
+.btn-solid:hover{background:var(--paper);color:var(--ink)}
+.note{font-size:12px;line-height:1.6;color:var(--soft);border-top:1px solid var(--ink);padding-top:10px}
+</style>
+</head>
+<body>
+<main id="stage" data-style="flip" data-ratio="1440x1080">
+  <header class="bar">
+    <span class="brand">INK TIME</span>
+    <span class="bar-end">
+      <span class="meta" id="metaLine">--</span>
+      <button id="gear" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="打开设置">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="miter" aria-hidden="true">
+          <path d="M12 2.2l1.6 2.1 2.5-.6.9 2.5 2.5.9-.6 2.5 2.1 1.6-2.1 1.6.6 2.5-2.5.9-.9 2.5-2.5-.6L12 21.8l-1.6-2.1-2.5.6-.9-2.5-2.5-.9.6-2.5L3 12.8l2.1-1.6-.6-2.5 2.5-.9.9-2.5 2.5.6L12 2.2z"/>
+          <circle cx="12" cy="12" r="3.4"/>
+        </svg>
+      </button>
+    </span>
+  </header>
+
+  <svg class="dial" id="dial" viewBox="0 0 100 100" aria-hidden="true">
+    <circle cx="50" cy="50" r="46.5" fill="none" stroke="#000" stroke-width="1.4"/>
+    <g id="dialTicks" fill="#000"></g>
+    <line id="handHour" x1="50" y1="50" x2="50" y2="28" stroke="#000" stroke-width="3" stroke-linecap="square"/>
+    <line id="handMin" x1="50" y1="50" x2="50" y2="14" stroke="#000" stroke-width="1.6" stroke-linecap="square"/>
+    <circle cx="50" cy="50" r="2" fill="#000"/>
+  </svg>
+
+  <section class="timeblock">
+    <span class="eyebrow">LOCAL TIME</span>
+    <div class="hm" id="hm">--:--</div>
+  </section>
+
+  <section class="dateblock">
+    <div class="bignum" id="bignum">--</div>
+    <div class="info">
+      <div class="d1">
+        <span id="dateMain">----年-月-日</span>
+        <span class="chip" id="weekday">星期-</span>
+      </div>
+      <div class="d2" id="dateSub">农历--</div>
+    </div>
+  </section>
+
+  <section class="cal" aria-label="本月日历">
+    <div class="cal-head">
+      <span id="calTitle">----年-月</span>
+      <span class="gz" id="gzLine"></span>
+    </div>
+    <div class="cal-wk" aria-hidden="true">
+      <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+    </div>
+    <div class="cal-grid" id="calGrid"></div>
+  </section>
+</main>
+
+<div id="overlay" hidden>
+  <div class="backdrop" id="backdrop"></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle" id="modal">
+    <div class="m-head">
+      <h2 id="mTitle">设置</h2>
+      <button type="button" class="m-close" id="btnClose" aria-label="关闭设置">✕</button>
+    </div>
+    <div class="m-body">
+      <section class="m-sec">
+        <h3>屏幕比例</h3>
+        <div class="seg" role="group" aria-label="屏幕比例">
+          <button type="button" class="seg-btn" data-ratio="1440x1080" aria-pressed="false">1440×1080</button>
+          <button type="button" class="seg-btn" data-ratio="1080x1440" aria-pressed="false">1080×1440</button>
+        </div>
+      </section>
+
+      <section class="m-sec">
+        <h3>整页刷新频率</h3>
+        <p class="hint">按间隔整页刷新，清除墨水屏残影；时钟本身每分钟自动更新。</p>
+        <div class="seg" role="group" aria-label="刷新频率">
+          <button type="button" class="seg-btn" data-ref="1" aria-pressed="false">1 分钟</button>
+          <button type="button" class="seg-btn" data-ref="5" aria-pressed="false">5 分钟</button>
+          <button type="button" class="seg-btn" data-ref="10" aria-pressed="false">10 分钟</button>
+          <button type="button" class="seg-btn" data-ref="custom" aria-pressed="false">自定义</button>
+        </div>
+        <div class="custom-row" id="customRow" hidden>
+          <label for="customMin">间隔</label>
+          <input id="customMin" type="number" min="1" max="720" step="1" inputmode="numeric">
+          <span>分钟（1–720）</span>
+        </div>
+        <p class="hint err" id="refErr" hidden>请输入 1–720 之间的整数分钟</p>
+      </section>
+
+      <section class="m-sec">
+        <h3>款式</h3>
+        <div class="seg" role="group" aria-label="款式">
+          <button type="button" class="seg-btn" data-style="flip" aria-pressed="false">翻页站台</button>
+          <button type="button" class="seg-btn" data-style="tear" aria-pressed="false">撕历台历</button>
+          <button type="button" class="seg-btn" data-style="grid" aria-pressed="false">仪表网格</button>
+          <button type="button" class="seg-btn" data-style="dial" aria-pressed="false">圆形表盘</button>
+        </div>
+      </section>
+
+      <div class="m-actions">
+        <button type="button" class="btn" id="btnReload">立即刷新</button>
+        <button type="button" class="btn btn-solid" id="btnDone">完成</button>
+      </div>
+      <p class="note">已为墨水屏优化：无动画，仅整分钟更新 DOM，页面隐藏时暂停计时。</p>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ============================================================
+   InkTime — 静态墨水屏时钟
+   资源策略：无外部依赖、无动画、对齐整分钟的 setTimeout 链、
+   仅在内容变化时写 DOM、隐藏页暂停计时、按设置整页刷新清残影
+   ============================================================ */
+
+/* ============================================================
+   农历数据与算法
+   lunarInfo(1900-2100) 与 sTermInfo(节气) 采用公开的 calendar.js
+   压缩表（数据源为紫金山天文台/香港天文台历表），已用
+   2026-02-17 春节、2026-09-23 八月十三/秋分 等基准日校验
+   ============================================================ */
+const LUNAR_INFO = [
+0x04bd8,0x04ae0,0x0a570,0x054d5,0x0d260,0x0d950,0x16554,0x056a0,0x09ad0,0x055d2,
+0x04ae0,0x0a5b6,0x0a4d0,0x0d250,0x1d255,0x0b540,0x0d6a0,0x0ada2,0x095b0,0x14977,
+0x04970,0x0a4b0,0x0b4b5,0x06a50,0x06d40,0x1ab54,0x02b60,0x09570,0x052f2,0x04970,
+0x06566,0x0d4a0,0x0ea50,0x16a95,0x05ad0,0x02b60,0x186e3,0x092e0,0x1c8d7,0x0c950,
+0x0d4a0,0x1d8a6,0x0b550,0x056a0,0x1a5b4,0x025d0,0x092d0,0x0d2b2,0x0a950,0x0b557,
+0x06ca0,0x0b550,0x15355,0x04da0,0x0a5b0,0x14573,0x052b0,0x0a9a8,0x0e950,0x06aa0,
+0x0aea6,0x0ab50,0x04b60,0x0aae4,0x0a570,0x05260,0x0f263,0x0d950,0x05b57,0x056a0,
+0x096d0,0x04dd5,0x04ad0,0x0a4d0,0x0d4d4,0x0d250,0x0d558,0x0b540,0x0b6a0,0x195a6,
+0x095b0,0x049b0,0x0a974,0x0a4b0,0x0b27a,0x06a50,0x06d40,0x0af46,0x0ab60,0x09570,
+0x04af5,0x04970,0x064b0,0x074a3,0x0ea50,0x06b58,0x05ac0,0x0ab60,0x096d5,0x092e0,
+0x0c960,0x0d954,0x0d4a0,0x0da50,0x07552,0x056a0,0x0abb7,0x025d0,0x092d0,0x0cab5,
+0x0a950,0x0b4a0,0x0baa4,0x0ad50,0x055d9,0x04ba0,0x0a5b0,0x15176,0x052b0,0x0a930,
+0x07954,0x06aa0,0x0ad50,0x05b52,0x04b60,0x0a6e6,0x0a4e0,0x0d260,0x0ea65,0x0d530,
+0x05aa0,0x076a3,0x096d0,0x04afb,0x04ad0,0x0a4d0,0x1d0b6,0x0d250,0x0d520,0x0dd45,
+0x0b5a0,0x056d0,0x055b2,0x049b0,0x0a577,0x0a4b0,0x0aa50,0x1b255,0x06d20,0x0ada0,
+0x14b63,0x09370,0x049f8,0x04970,0x064b0,0x168a6,0x0ea50,0x06b20,0x1a6c4,0x0aae0,
+0x092e0,0x0d2e3,0x0c960,0x0d557,0x0d4a0,0x0da50,0x05d55,0x056a0,0x0a6d0,0x055d4,
+0x052d0,0x0a9b8,0x0a950,0x0b4a0,0x0b6a6,0x0ad50,0x055a0,0x0aba4,0x0a5b0,0x052b0,
+0x0b273,0x06930,0x07337,0x06aa0,0x0ad50,0x14b55,0x04b60,0x0a570,0x054e4,0x0d160,
+0x0e968,0x0d520,0x0daa0,0x16aa6,0x056d0,0x04ae0,0x0a9d4,0x0a2d0,0x0d150,0x0f252,
+0x0d520
+]; // 1900-2100
+
+/** 返回农历 y 年总天数 @param {number} y @returns {number} */
+function lYearDays(y){
+  let sum = 348;
+  for(let i = 0x8000; i > 0x8; i >>= 1){ sum += (LUNAR_INFO[y - 1900] & i) ? 1 : 0; }
+  return sum + leapDays(y);
+}
+/** 返回农历 y 年闰月月份(0=无) @param {number} y @returns {number} */
+function leapMonth(y){ return LUNAR_INFO[y - 1900] & 0xf; }
+/** 返回闰月天数 @param {number} y @returns {0|29|30} */
+function leapDays(y){ return leapMonth(y) ? ((LUNAR_INFO[y - 1900] & 0x10000) ? 30 : 29) : 0; }
+/** 返回农历 y 年 m 月(非闰月)天数 @param {number} y @param {number} m @returns {29|30|-1} */
+function monthDays(y, m){
+  if(m < 1 || m > 12) return -1;
+  return (LUNAR_INFO[y - 1900] & (0x10000 >> m)) ? 30 : 29;
+}
+
+const M_NAME = ["正","二","三","四","五","六","七","八","九","十","冬","腊"];
+/** 数字→农历日名(初一/二十/三十) @param {number} d @returns {string} */
+function dayName(d){
+  if(d === 10) return "初十";
+  if(d === 20) return "二十";
+  if(d === 30) return "三十";
+  return ["初","十","廿","卅"][Math.floor(d / 10)] + "日一二三四五六七八九"[d % 10];
+}
+/**
+ * 公历→农历（仅保留界面所需字段）
+ * @param {number} y @param {number} m @param {number} d
+ * @returns {{lYear:number,lMonth:number,lDay:number,isLeap:boolean}|null} 越界返回 null
+ */
+function solar2lunar(y, m, d){
+  if(y < 1900 || y > 2100) return null;
+  if(y === 1900 && m === 1 && d < 31) return null;
+  let offset = (Date.UTC(y, m - 1, d) - Date.UTC(1900, 0, 31)) / 86400000;
+  let i = 1900, temp = 0;
+  for(; i < 2101 && offset > 0; i++){ temp = lYearDays(i); offset -= temp; }
+  if(offset < 0){ offset += temp; i--; }
+  const lYear = i;
+  const leap = leapMonth(lYear);
+  let isLeap = false;
+  for(i = 1; i < 13 && offset > 0; i++){
+    if(leap > 0 && i === leap + 1 && !isLeap){ --i; isLeap = true; temp = leapDays(lYear); }
+    else { temp = monthDays(lYear, i); }
+    if(isLeap && i === leap + 1){ isLeap = false; }
+    offset -= temp;
+  }
+  if(offset === 0 && leap > 0 && i === leap + 1){
+    if(isLeap){ isLeap = false; } else { isLeap = true; --i; }
+  }
+  if(offset < 0){ offset += temp; --i; }
+  return { lYear, lMonth: i, lDay: offset + 1, isLeap };
+}
+
+/* 24 节气名，索引 0=小寒 … 23=冬至 */
+const TERM_NAMES = ["小寒","大寒","立春","雨水","惊蛰","春分","清明","谷雨","立夏","小满","芒种","夏至","小暑","大暑","立秋","处暑","白露","秋分","寒露","霜降","立冬","小雪","大雪","冬至"];
+/* 1900-2100 各年 24 节气日期压缩表：每年 29 位十六进制，
+   解码为 6 组，每组十进制 6 位拆成 4 个"日"（1位+2位+1位+2位） */
+const TERM_INFO = [
+"9778397bd097c36b0b6fc9274c91aa","97b6b97bd19801ec9210c965cc920e","97bcf97c3598082c95f8c965cc920f","97bd0b06bdb0722c965ce1cfcc920f",
+"b027097bd097c36b0b6fc9274c91aa","97b6b97bd19801ec9210c965cc920e","97bcf97c359801ec95f8c965cc920f","97bd0b06bdb0722c965ce1cfcc920f",
+"b027097bd097c36b0b6fc9274c91aa","97b6b97bd19801ec9210c965cc920e","97bcf97c3598082c95f8c965cc920f","97bd0b06bdb0722c965ce1cfcc920f",
+"b027097bd097c36b0b6fc9274c91aa","9778397bd19801ec9210c965cc920e","97bcf97c359801ec95f8c965cc920f","97bd09801d98082c95f8e1cfcc920f",
+"97bd097bd097c36b0b6fc9210c8dc2","9778397bd197c36c9210c9274c91aa","97b6b97bd19801ec9210c965cc920e","97bd09801d98082c95f8e1cfcc920f",
+"97bd097bd097c36b0b6fc9210c8dc2","9778397bd197c36c9210c9274c91aa","97b6b97bd19801ec9210c965cc920e","97bcf97c3598082c95f8e1cfcc920f",
+"97bd097bd097c36b0b6fc9210c8dc2","9778397bd197c36c9210c9274c91aa","97b6b97bd19801ec9210c965cc920e","97bcf97c359801ec95f8c965cc920f",
+"97bd097bd097c35b0b6fc920fb0722","9778397bd097c36b0b6fc9274c91aa","97b6b97bd19801ec9210c965cc920e","97bcf97c3598082c95f8c965cc920f",
+"97bd097bd097c35b0b6fc920fb0722","9778397bd097c36b0b6fc9274c91aa","97b6b97bd19801ec9210c965cc920e","97bcf97c359801ec95f8c965cc920f",
+"97bd097bd097c35b0b6fc920fb0722","9778397bd097c36b0b6fc9274c91aa","97b6b97bd19801ec9210c965cc920e","97bcf97c3598082c95f8c965cc920f",
+"97bd097bd07f595b0b6fc920fb0722","9778397bd097c36b0b6fc9210c8dc2","9778397bd19801ec9210c9274c920e","97bcf97c359801ec95f8c965cc920f",
+"97bd07f5307f595b0b0bc920fb0722","7f0e397bd097c36b0b6fc9210c8dc2","9778397bd097c36c9210c9274c920e","97b6b97bd19801ec9210c965cc920f",
+"97bd07f5307f595b0b0bc920fb0722","7f0e397bd097c36b0b6fc9210c8dc2","9778397bd097c36c9210c9274c91aa","97b6b97bd19801ec9210c965cc920e",
+"97bd07f1487f595b0b0bc920fb0722","7f0e397bd097c36b0b6fc9210c8dc2","9778397bd097c36c9210c9274c91aa","97b6b97bd19801ec9210c965cc920e",
+"97bcf7f1487f595b0b0bb0b6fb0722","7f0e397bd097c35b0b6fc920fb0722","9778397bd097c36b0b6fc9274c91aa","97b6b97bd19801ec9210c965cc920e",
+"97bcf7f1487f595b0b0bb0b6fb0722","7f0e397bd097c35b0b6fc920fb0722","9778397bd097c36b0b6fc9274c91aa","97b6b97bd19801ec9210c965cc920e",
+"97bcf7f1487f531b0b0bb0b6fb0722","7f0e397bd097c35b0b6fc920fb0722","9778397bd097c36b0b6fc9274c91aa","97b6b97bd19801ec9210c965cc920e",
+"97bcf7f1487f531b0b0bb0b6fb0722","7f0e397bd07f595b0b6fc920fb0722","9778397bd097c36b0b6fc9274c91aa","97b6b97bd19801ec9210c965cc920e",
+"97bcf7f0e47f531b0b0bb0b6fb0722","7f0e397bd07f595b0b0bc920fb0722","9778397bd097c36b0b6fc9274c91aa","97b6b97bd197c36c9210c9274c91aa",
+"97bcf7f0e47f531b0b0bb0b6fb0722","7f0e397bd07f595b0b0bc920fb0722","9778397bd097c36b0b6fc9210c8dc2","9778397bd097c36c9210c9274c920e",
+"97b6b7f0e47f531b0723b0b6fb0722","7f0e37f5307f595b0b0bc920fb0722","7f0e397bd097c36b0b6fc9210c8dc2","9778397bd097c36b0b70c9274c91aa",
+"97b6b7f0e47f531b0723b0b6fb0721","7f0e37f1487f595b0b0bb0b6fb0722","7f0e397bd097c35b0b6fc9210c8dc2","9778397bd097c36b0b6fc9274c91aa",
+"97b6b7f0e47f531b0723b0b6fb0721","7f0e27f1487f595b0b0bb0b6fb0722","7f0e397bd097c35b0b6fc920fb0722","9778397bd097c36b0b6fc9274c91aa",
+"97b6b7f0e47f531b0723b0b6fb0721","7f0e27f1487f531b0b0bb0b6fb0722","7f0e397bd097c35b0b6fc920fb0722","9778397bd097c36b0b6fc9274c91aa",
+"97b6b7f0e47f531b0723b0b6fb0721","7f0e27f1487f531b0b0bb0b6fb0722","7f0e397bd097c35b0b6fc920fb0722","9778397bd097c36b0b6fc9274c91aa",
+"97b6b7f0e47f531b0723b0b6fb0721","7f0e27f1487f531b0b0bb0b6fb0722","7f0e397bd07f595b0b0bc920fb0722","9778397bd097c36b0b6fc9274c91aa",
+"97b6b7f0e47f531b0723b0787b0721","7f0e27f0e47f531b0b0bb0b6fb0722","7f0e397bd07f595b0b0bc920fb0722","9778397bd097c36b0b6fc9274c91aa",
+"97b6b7f0e47f149b0723b0787b0721","7f0e27f0e47f531b0723b0b6fb0722","7f0e397bd07f595b0b0bc920fb0722","9778397bd097c36b0b6fc9210c8dc2",
+"977837f0e37f149b0723b0787b0721","7f07e7f0e47f531b0723b0b6fb0722","7f0e37f5307f595b0b0bc920fb0722","7f0e397bd097c36b0b6fc9210c8dc2",
+"977837f0e37f14998082b0787b0721","7f07e7f0e47f531b0723b0b6fb0721","7f0e37f1487f595b0b0bb0b6fb0722","7f0e397bd097c36b0b6fc9210c8dc2",
+"977837f0e37f14998082b0787b06bd","7f07e7f0e47f531b0723b0b6fb0721","7f0e27f1487f531b0b0bb0b6fb0722","7f0e397bd097c35b0b6fc920fb0722",
+"977837f0e37f14998082b0787b06bd","7f07e7f0e47f531b0723b0b6fb0721","7f0e27f1487f531b0b0bb0b6fb0722","7f0e397bd097c35b0b6fc920fb0722",
+"977837f0e37f14998082b0787b06bd","7f07e7f0e47f531b0723b0b6fb0721","7f0e27f1487f531b0b0bb0b6fb0722","7f0e397bd097c35b0b6fc920fb0722",
+"977837f0e37f14998082b0787b06bd","7f07e7f0e47f531b0723b0b6fb0721","7f0e27f1487f531b0b0bb0b6fb0722","7f0e397bd07f595b0b0bc920fb0722",
+"977837f0e37f14998082b0787b06bd","7f07e7f0e47f531b0723b0b6fb0721","7f0e27f1487f531b0b0bb0b6fb0722","7f0e397bd07f595b0b0bc920fb0722",
+"977837f0e37f14998082b0787b06bd","7f07e7f0e47f149b0723b0787b0721","7f0e27f0e47f149b0723b0b6fb0722","7f0e397bd07f595b0b0bc920fb0722",
+"977837f0e37f14998082b0723b06bd","7f07e7f0e37f149b0723b0787b0721","7f0e27f0e47f531b0b0bb0b6fb0722","7f0e397bd07f595b0b0bc920fb0722",
+"977837f0e37f14898082b0723b02d5","7ec967f0e37f14998082b0787b0721","7f07e7f0e47f531b0723b0b6fb0722","7f0e37f1487f595b0b0bb0b6fb0722",
+"7f0e37f0e37f14898082b0723b02d5","7ec967f0e37f14998082b0787b0721","7f07e7f0e47f531b0723b0b6fb0722","7f0e37f1487f595b0b0bb0b6fb0722",
+"7f0e37f0e37f14898082b0723b02d5","7ec967f0e37f14998082b0787b06bd","7f07e7f0e47f531b0723b0b6fb0721","7f0e37f1487f595b0b0bb0b6fb0722",
+"7f0e37f0e37f14898082b072297c35","7ec967f0e37f14998082b0787b06bd","7f07e7f0e47f531b0723b0b6fb0721","7f0e27f1487f531b0b0bb0b6fb0722",
+"7f0e37f0e37f14898082b072297c35","7ec967f0e37f14998082b0787b06bd","7f07e7f0e47f531b0723b0b6fb0721","7f0e27f1487f531b0b0bb0b6fb0722",
+"7f0e37f0e366aa89801eb072297c35","7ec967f0e37f14998082b0787b06bd","7f07e7f0e47f149b0723b0787b0721","7f0e27f1487f531b0b0bb0b6fb0722",
+"7f0e37f0e366aa89801eb072297c35","7ec967f0e37f14998082b0787b06bd","7f07e7f0e47f149b0723b0787b0721","7f0e27f0e47f531b0b0bb0b6fb0722",
+"7f0e37f0e366aa89801eb072297c35","7ec967f0e37f14998082b0787b06bd","7f07e7f0e47f149b0723b0787b0721","7f0e27f0e47f531b0b0bb0b6fb0722",
+"7f0e37f0e366aa89801eb072297c35","7ec967f0e37f14898082b0723b02d5","7f07e7f0e37f14998082b0787b0721","7f07e7f0e47f531b0723b0b6fb0722",
+"7f0e36665b66aa89801e9808297c35","665f67f0e37f14898082b0723b02d5","7ec967f0e37f14998082b0787b0721","7f07e7f0e47f531b0723b0b6fb0722",
+"7f0e36665b66a449801e9808297c35","665f67f0e37f14898082b0723b02d5","7ec967f0e37f14998082b0787b06bd","7f07e7f0e47f531b0723b0b6fb0721",
+"7f0e36665b66a449801e9808297c35","665f67f0e37f14898082b072297c35","7ec967f0e37f14998082b0787b06bd","7f07e7f0e47f531b0723b0b6fb0721",
+"7f0e26665b66a449801e9808297c35","665f67f0e37f1489801eb072297c35","7ec967f0e37f14998082b0787b06bd","7f07e7f0e47f531b0723b0b6fb0721",
+"7f0e27f1487f531b0b0bb0b6fb0722"
+]; // 1900-2100，每行 4 年
+
+/**
+ * 取公历 y 年第 n 个节气所在日(1-24 对应 小寒…冬至)
+ * @param {number} y @param {number} n @returns {number} 日，越界返回 -1
+ */
+function getTerm(y, n){
+  if(y < 1900 || y > 2100 || n < 1 || n > 24) return -1;
+  const table = TERM_INFO[y - 1900];
+  const groups = [];
+  for(let g = 0; g < 6; g++){
+    // 每 5 位十六进制 → 十进制字符串，按 1+2+1+2 位拆出 4 个节气的"日"
+    groups.push(parseInt("0x" + table.substr(g * 5, 5)).toString());
+  }
+  const days = [];
+  for(const s of groups){
+    days.push(+s[0], +s.slice(1, 3), +s[3], +s.slice(4, 6));
+  }
+  return days[n - 1];
+}
+/**
+ * 取"当前节气"名（已进入的最近一个节气），如 9 月中旬后显示"白露"
+ * @param {number} y @param {number} m @param {number} d @returns {string}
+ */
+function currentTerm(y, m, d){
+  const a = getTerm(y, m * 2 - 1), b = getTerm(y, m * 2);
+  if(d >= b) return TERM_NAMES[m * 2 - 1];
+  if(d >= a) return TERM_NAMES[m * 2 - 2];
+  const pm = m - 1;
+  if(pm < 1) return getTerm(y - 1, 24) >= 0 ? TERM_NAMES[23] : "";
+  return TERM_NAMES[pm * 2 - 1];
+}
+
+/* 节日表：公历 key="月-日"，农历 key="月-日"（仅平月，界面用途足够） */
+const SFEST = {"1-1":"元旦","2-14":"情人节","3-8":"妇女节","4-1":"愚人节","5-1":"劳动节","5-4":"青年节","6-1":"儿童节","7-1":"建党节","8-1":"建军节","9-10":"教师节","10-1":"国庆节","12-25":"圣诞节"};
+const LFEST = {"1-1":"春节","1-15":"元宵节","5-5":"端午节","7-7":"七夕","8-15":"中秋节","9-9":"重阳节","12-8":"腊八"};
+
+/**
+ * 某公历日的展示用小字：节日 > 农历初一月名 > 农历日名
+ * @param {number} y @param {number} m @param {number} d @returns {string}
+ */
+function cellLabel(y, m, d){
+  const sf = SFEST[m + "-" + d];
+  if(sf) return sf;
+  const L = solar2lunar(y, m, d);
+  if(!L) return "";
+  const lf = !L.isLeap ? LFEST[L.lMonth + "-" + L.lDay] : null;
+  if(lf) return lf;
+  if(!L.isLeap && L.lMonth === 12 && L.lDay === monthDays(L.lYear, 12)) return "除夕";
+  if(L.lDay === 1) return (L.isLeap ? "闰" : "") + M_NAME[L.lMonth - 1] + "月";
+  return (L.isLeap ? "闰" : "") + dayName(L.lDay);
+}
+
+/** ISO-8601 周数（周一为一周起点） @param {Date} date @returns {number} */
+function isoWeek(date){
+  const t = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const wd = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - wd);
+  const y0 = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return Math.ceil((((t - y0) / 86400000) + 1) / 7);
+}
+/** 干支年（以农历年为界，与春节生肖一致） @param {number} lYear @returns {string} 如"丙午年" */
+function ganZhiYear(lYear){
+  const GAN = ["甲","乙","丙","丁","戊","己","庚","辛","壬","癸"];
+  const ZHI = ["子","丑","寅","卯","辰","巳","午","未","申","酉","戌","亥"];
+  return GAN[(lYear - 4) % 10] + ZHI[(lYear - 4) % 12] + "年";
+}
+
+/* ============================================================
+   配置状态：比例 / 刷新频率 / 款式，存 localStorage
+   存储不可用（隐私模式等）时静默降级为默认值，页面照常工作
+   ============================================================ */
+const RATIOS = { "1440x1080": [1440, 1080], "1080x1440": [1080, 1440] };
+const STYLE_NAMES = { flip: "翻页站台", tear: "撕历台历", grid: "仪表网格", dial: "圆形表盘" };
+const PRESETS = [1, 5, 10];
+
+const DEFAULTS = { ratio: "1440x1080", style: "flip", refreshMin: 5, preset: "5" };
+
+/** 读取配置（含容错） @returns {{ratio:string,style:string,refreshMin:number,preset:string}} */
+function loadCfg(){
+  try{
+    const raw = localStorage.getItem("inktime.cfg");
+    if(!raw) return { ...DEFAULTS };
+    const o = JSON.parse(raw);
+    const cfg = { ...DEFAULTS, ...o };
+    if(!RATIOS[cfg.ratio]) cfg.ratio = DEFAULTS.ratio;
+    if(!STYLE_NAMES[cfg.style]) cfg.style = DEFAULTS.style;
+    cfg.refreshMin = clampMin(cfg.refreshMin);
+    cfg.preset = PRESETS.includes(cfg.refreshMin) ? String(cfg.refreshMin) : "custom";
+    return cfg;
+  }catch(e){
+    return { ...DEFAULTS };
+  }
+}
+/** 写配置（含容错） @param {typeof DEFAULTS} cfg */
+function saveCfg(cfg){
+  try{ localStorage.setItem("inktime.cfg", JSON.stringify(cfg)); }catch(e){ /* 降级为仅本次会话 */ }
+}
+/** 频率夹取 1–720 @param {unknown} n @returns {number} */
+function clampMin(n){
+  n = parseInt(n, 10);
+  if(!Number.isFinite(n)) return DEFAULTS.refreshMin;
+  return Math.min(720, Math.max(1, n));
+}
+/** 读整页刷新起点时间戳 @returns {number} 毫秒 */
+function readRefreshStamp(){
+  try{
+    const v = parseInt(localStorage.getItem("inktime.lastRefresh"), 10);
+    return Number.isFinite(v) ? v : Date.now();
+  }catch(e){ return Date.now(); }
+}
+/** 写整页刷新起点 @param {number} t */
+function writeRefreshStamp(t){
+  try{ localStorage.setItem("inktime.lastRefresh", String(t)); }catch(e){ /* 同上降级 */ }
+}
+
+const cfg = loadCfg();
+const stage = document.getElementById("stage");
+const overlay = document.getElementById("overlay");
+const gear = document.getElementById("gear");
+
+/**
+ * 按所选比例把舞台贴合视口（保持宽高比），并换算 --u 缩放单位
+ * 设计基准：横屏 1440 宽 / 竖屏 1080 宽，1u = 该基准下的 1px
+ */
+function fitStage(){
+  const [dw, dh] = RATIOS[cfg.ratio];
+  const ar = dw / dh;
+  let w = window.innerWidth;
+  let h = w / ar;
+  if(h > window.innerHeight){
+    h = window.innerHeight;
+    w = h * ar;
+  }
+  stage.style.width = Math.round(w) + "px";
+  stage.style.height = Math.round(h) + "px";
+  stage.style.setProperty("--u", (w / dw) + "px");
+}
+
+/** 把配置应用到 DOM（舞台属性 + 比例贴合） */
+function applyCfg(){
+  stage.dataset.style = cfg.style;
+  stage.dataset.ratio = cfg.ratio;
+  fitStage();
+}
+
+/* ============================================================
+   渲染：按变化量写 DOM —— 时间只在整分钟变、日期/日历只在跨天变
+   ============================================================ */
+const $ = (id) => document.getElementById(id);
+const pad2 = (n) => String(n).padStart(2, "0");
+const el = { hm: $("hm"), bignum: $("bignum"), dateMain: $("dateMain"), weekday: $("weekday"),
+  dateSub: $("dateSub"), metaLine: $("metaLine"), calTitle: $("calTitle"), gzLine: $("gzLine"),
+  calGrid: $("calGrid"), handHour: $("handHour"), handMin: $("handMin") };
+const WDAY = ["星期日","星期一","星期二","星期三","星期四","星期五","星期六"];
+
+/** 只在内容变化时写 textContent，避免每分钟无谓的 DOM 触碰 */
+function setText(node, v){
+  if(node && node.textContent !== v) node.textContent = v;
+}
+
+/**
+ * 跨天级渲染：日期行 / 干支 / 月历整表 / 顶栏周数
+ * @param {Date} now
+ */
+function renderDay(now){
+  const y = now.getFullYear(), m = now.getMonth() + 1, d = now.getDate();
+  const wd = WDAY[now.getDay()];
+  const L = solar2lunar(y, m, d);
+  const term = currentTerm(y, m, d);
+  const sf = SFEST[m + "-" + d];
+  const lf = L && !L.isLeap ? LFEST[L.lMonth + "-" + L.lDay] : null;
+  const chuXi = L && !L.isLeap && L.lMonth === 12 && L.lDay === monthDays(L.lYear, 12);
+
+  setText(el.bignum, String(d));
+  setText(el.dateMain, y + "年" + m + "月" + d + "日");
+  setText(el.weekday, wd);
+  if(L){
+    const ln = (L.isLeap ? "闰" : "") + M_NAME[L.lMonth - 1] + "月" + dayName(L.lDay);
+    const fest = chuXi ? "除夕" : (lf || sf);
+    setText(el.dateSub, "农历" + ln + " · " + (fest ? fest + " · " : "") + term);
+    setText(el.gzLine, ganZhiYear(L.lYear));
+  }else{
+    setText(el.dateSub, term);
+    setText(el.gzLine, "");
+  }
+  setText(el.metaLine, y + " · 第" + isoWeek(now) + "周");
+  setText(el.calTitle, y + "年" + m + "月");
+  buildCal(y, m, d);
+}
+
+/**
+ * 生成 6×7 月历（周一开头，含前后月暗色日期）
+ * @param {number} y @param {number} m @param {number} todayD
+ */
+function buildCal(y, m, todayD){
+  const first = new Date(y, m - 1, 1);
+  const start = (first.getDay() + 6) % 7;            // 周一=0
+  const cells = document.createDocumentFragment();
+  for(let i = 0; i < 42; i++){
+    const t = new Date(y, m - 1, 1 - start + i);
+    const cy = t.getFullYear(), cm = t.getMonth() + 1, cd = t.getDate();
+    const out = cm !== m;
+    const isToday = !out && cd === todayD;
+    const div = document.createElement("div");
+    div.className = "cell" + (out ? " out" : "") + (isToday ? " today" : "");
+    if(isToday) div.setAttribute("aria-current", "date");
+    const dn = document.createElement("span");
+    dn.className = "d";
+    dn.textContent = String(cd);
+    const ln = document.createElement("span");
+    ln.className = "l";
+    ln.textContent = cellLabel(cy, cm, cd);
+    div.append(dn, ln);
+    cells.appendChild(div);
+  }
+  el.calGrid.replaceChildren(cells);
+}
+
+/**
+ * 分钟级渲染：时刻文字 + 表盘指针（仅跳格，无扫秒）
+ * @param {Date} now
+ */
+function renderTime(now){
+  const h = now.getHours(), m = now.getMinutes();
+  setText(el.hm, pad2(h) + ":" + pad2(m));
+  // 指针角度：时针含分钟偏移，只在分钟变化时整体跳动
+  el.handHour.setAttribute("transform", "rotate(" + ((h % 12) * 30 + m * 0.5) + " 50 50)");
+  el.handMin.setAttribute("transform", "rotate(" + (m * 6) + " 50 50)");
+}
+
+/** 表盘刻度：仅初始化时生成一次（60 刻，5 分钟为长刻度） */
+function buildDialTicks(){
+  const g = $("dialTicks");
+  const frag = document.createDocumentFragment();
+  for(let i = 0; i < 60; i++){
+    const major = i % 5 === 0;
+    const a = (i * 6 - 90) * Math.PI / 180;
+    const r1 = major ? 36 : 41.5, r2 = 45;
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", (50 + Math.cos(a) * r1).toFixed(2));
+    line.setAttribute("y1", (50 + Math.sin(a) * r1).toFixed(2));
+    line.setAttribute("x2", (50 + Math.cos(a) * r2).toFixed(2));
+    line.setAttribute("y2", (50 + Math.sin(a) * r2).toFixed(2));
+    line.setAttribute("stroke", "#000");
+    line.setAttribute("stroke-width", major ? "1.6" : "0.6");
+    frag.appendChild(line);
+  }
+  g.appendChild(frag);
+}
+
+/* ---------------- 调度：对齐整分钟的 setTimeout 链 ---------------- */
+let tickTimer = 0;
+let lastDayKey = "";
+
+/** 每次滴答：先查是否到了整页刷新时间，再渲染并续订 */
+function onTick(){
+  if(document.hidden) return; // 隐藏时由 visibilitychange 负责唤醒
+  const now = new Date();
+  // 到设定间隔则整页刷新——墨水屏靠全刷清残影，这是本页面的"省电式重绘"
+  const last = readRefreshStamp();
+  if(now.getTime() - last >= cfg.refreshMin * 60000){
+    writeRefreshStamp(now.getTime());
+    location.reload();
+    return;
+  }
+  renderTime(now);
+  const dayKey = now.getFullYear() + "-" + now.getMonth() + "-" + now.getDate();
+  if(dayKey !== lastDayKey){
+    lastDayKey = dayKey;
+    renderDay(now);
+  }
+  scheduleTick();
+}
+
+/** 对齐到下一个整分钟（+50ms 缓冲，避免边界竞态） @param {number} [delay] 自定义毫秒 */
+function scheduleTick(delay){
+  clearTimeout(tickTimer);
+  const wait = typeof delay === "number" ? delay : (60000 - (Date.now() % 60000) + 50);
+  tickTimer = setTimeout(onTick, wait);
+}
+
+/* 页面隐藏=墨水屏静止，停掉计时器；回来时立即补渲染并重新对齐 */
+document.addEventListener("visibilitychange", () => {
+  if(document.hidden){
+    clearTimeout(tickTimer);
+  }else{
+    lastDayKey = "";
+    onTick();
+  }
+});
+
+/* 视口变化（含旋转屏）→ 重新贴合比例 */
+window.addEventListener("resize", fitStage);
+
+/* ============================================================
+   设置交互 + 齿轮自动隐藏
+   ============================================================ */
+const backdrop = $("backdrop");
+const customRow = $("customRow");
+const customMin = $("customMin");
+const refErr = $("refErr");
+let overlayOpen = false;
+let hideTimer = 0;
+
+/** 让齿轮在无操作 5 秒后隐藏，保证时钟面干净（也省下角标常亮的墨水） */
+function armGearHide(){
+  clearTimeout(hideTimer);
+  document.body.classList.remove("idle");
+  if(overlayOpen) return;
+  hideTimer = setTimeout(() => document.body.classList.add("idle"), 5000);
+}
+/* 指针/按键活动即唤回齿轮；600ms 节流，避免移动事件高频重置定时器 */
+let lastPoke = 0;
+function pokeGear(){
+  const t = Date.now();
+  if(t - lastPoke < 600) return;
+  lastPoke = t;
+  armGearHide();
+}
+["pointermove", "pointerdown", "keydown"].forEach((ev) =>
+  document.addEventListener(ev, pokeGear, { passive: true }));
+
+/** 打开设置 */
+function openSettings(){
+  overlayOpen = true;
+  overlay.hidden = false;
+  gear.setAttribute("aria-expanded", "true");
+  clearTimeout(hideTimer);
+  document.body.classList.remove("idle");
+  syncUI();
+  const first = overlay.querySelector(".seg-btn");
+  if(first) first.focus();
+}
+/** 关闭设置 */
+function closeSettings(){
+  overlayOpen = false;
+  overlay.hidden = true;
+  gear.setAttribute("aria-expanded", "false");
+  gear.focus();
+  armGearHide();
+}
+
+/** 持久化当前配置并重置整页刷新计时（改完设置不应立刻触发整页刷新） */
+function persist(){
+  saveCfg(cfg);
+  writeRefreshStamp(Date.now());
+}
+
+/** 把配置同步到设置面板的按压态/自定义行/错误提示 */
+function syncUI(){
+  overlay.querySelectorAll("[data-ratio]").forEach((b) =>
+    b.setAttribute("aria-pressed", String(b.dataset.ratio === cfg.ratio)));
+  overlay.querySelectorAll("[data-style]").forEach((b) =>
+    b.setAttribute("aria-pressed", String(b.dataset.style === cfg.style)));
+  const custom = cfg.preset === "custom";
+  customRow.hidden = !custom;
+  if(document.activeElement !== customMin) customMin.value = String(cfg.refreshMin);
+  const bad = !(Number.isInteger(cfg.refreshMin) && cfg.refreshMin >= 1 && cfg.refreshMin <= 720);
+  customMin.classList.toggle("bad", bad && custom);
+  refErr.hidden = !(custom && bad);
+  overlay.querySelectorAll("[data-ref]").forEach((b) =>
+    b.setAttribute("aria-pressed", String(
+      b.dataset.ref === "custom" ? custom : (!custom && Number(b.dataset.ref) === cfg.refreshMin))));
+}
+
+/* 设置面板事件委托 */
+overlay.addEventListener("click", (e) => {
+  if(e.target === backdrop){ closeSettings(); return; }
+  const btn = e.target.closest("button");
+  if(!btn) return;
+  if(btn.dataset.ratio){
+    cfg.ratio = btn.dataset.ratio;
+  }else if(btn.dataset.style){
+    cfg.style = btn.dataset.style;
+  }else if(btn.dataset.ref){
+    if(btn.dataset.ref === "custom"){
+      cfg.preset = "custom";
+      cfg.refreshMin = clampMin(cfg.refreshMin);
+    }else{
+      cfg.preset = btn.dataset.ref;
+      cfg.refreshMin = Number(btn.dataset.ref);
+    }
+  }else if(btn.id === "btnReload"){
+    location.reload();
+    return;
+  }else if(btn.id === "btnClose" || btn.id === "btnDone"){
+    closeSettings();
+    return;
+  }else{
+    return;
+  }
+  persist();
+  applyCfg();
+  syncUI();
+});
+
+/* 自定义频率：合法即保存，非法仅提示，不落盘 */
+customMin.addEventListener("input", () => {
+  const n = parseInt(customMin.value, 10);
+  const ok = Number.isInteger(n) && n >= 1 && n <= 720;
+  customMin.classList.toggle("bad", !ok);
+  refErr.hidden = ok;
+  if(ok){
+    cfg.preset = "custom";
+    cfg.refreshMin = n;
+    persist();
+    syncUI();
+  }
+});
+
+/* 键盘：Esc 关闭 + 焦点圈定在弹窗内 */
+overlay.addEventListener("keydown", (e) => {
+  if(e.key === "Escape"){ closeSettings(); return; }
+  if(e.key !== "Tab") return;
+  const focusables = [...overlay.querySelectorAll("button, input")].filter((n) => !n.hidden && n.offsetParent !== null);
+  if(!focusables.length) return;
+  const first = focusables[0], last = focusables[focusables.length - 1];
+  if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+  else if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+});
+
+gear.addEventListener("click", openSettings);
+
+/* ---------------- 启动 ---------------- */
+applyCfg();
+buildDialTicks();
+if(!readRefreshStamp() || !Number.isFinite(parseInt(localStorage.getItem("inktime.lastRefresh"), 10))) {
+  writeRefreshStamp(Date.now());
+}
+onTick();      // 首帧渲染并按整分钟续订
+armGearHide(); // 5 秒后收起齿轮
+</script>
+</body>
+</html>
